@@ -44,7 +44,7 @@
     {% endif %}
 {% endmacro %}
 
-{% macro starburst_etl_macro(schema_name, table_name, exclude_columns=none) %}
+{% macro etl_macro(schema_name, table_name, exclude_columns=none) %}
     {# Use the updated get_columns macro to retrieve column expressions #}
     {% set column_expressions = get_columns(schema_name, table_name, exclude_columns) %}
     
