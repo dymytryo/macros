@@ -1,0 +1,62 @@
+{% macro get_columns(schema_name, table_name, exclude_columns=none) %}
+    {# Validate input parameters to prevent SQL injection or logical errors #}
+    {% if not schema_name or not table_name %}
+        {{ log('Invalid or empty schema_name or table_name provided.', info=True) }}
+        {{ return([]) }}
+    {% endif %}
+    
+    {# Prepare the query to fetch column information from the database #}
+    {% set query = 'SELECT column_name, data_type FROM "snowflake"."information_schema"."columns" WHERE table_schema = \'' ~ schema_name ~ '\' AND table_name = \'' ~ table_name ~ '\'' %}
+    {% set results = run_query(query) %}
+    
+    {# Handle cases where query fails or returns no results #}
+    {% if execute %}
+        {% if results is none or results | length == 0 %}
+            {{ log('No columns found or failed to retrieve columns.', info=True) }}
+            {{ return([]) }}
+        {% endif %}
+        
+        {% set columns = [] %}
+        {% for row in results %}
+            {% set column_name_quoted = '"' ~ row['column_name'] ~ '"' %}
+            {% set data_type = row['data_type'].lower() %}
+            
+            {# Skip excluded columns #}
+            {% if exclude_columns is not none and row['column_name']|lower in exclude_columns|map('lower')|list %}
+                {# Exclude this column #}
+            {% else %}
+                {# Check data type and apply transformations #}
+                {% if 'time zone' in data_type %}
+                    {% set cast_expression = 'CAST(' ~ column_name_quoted ~ ' AS TIMESTAMP)' %}
+                    {% do columns.append(cast_expression ~ ' AS ' ~ column_name_quoted) %}
+                {% elif 'varchar' in data_type %}
+                    {% set col_length = data_type.split('(')[-1].replace(')', '')|int if '(' in data_type else 65535 %}
+                    {% set varchar_limit = var('default_varchar_length', 65535) %}
+                    {% set final_length = col_length if col_length <= varchar_limit else varchar_limit %}
+                    {% do columns.append('CAST(' ~ column_name_quoted ~ ' AS VARCHAR(' ~ final_length ~ ')) AS ' ~ column_name_quoted) %}
+                {% else %}
+                    {% do columns.append(column_name_quoted) %}
+                {% endif %}
+            {% endif %}
+        {% endfor %}
+        
+        {{ return(columns) }}
+    {% endif %}
+{% endmacro %}
+
+{% macro starburst_etl_macro(schema_name, table_name, exclude_columns=none) %}
+    {# Use the updated get_columns macro to retrieve column expressions #}
+    {% set column_expressions = get_columns(schema_name, table_name, exclude_columns) %}
+    
+    {# Check if column expressions are returned successfully #}
+    {% if column_expressions | length == 0 %}
+        {{ log('No valid columns to form a query.', info=True) }}
+        {{ return('SELECT 1') }}  {# Returning a dummy SQL statement #}
+    {% else %}
+        {# Build the SELECT query #}
+        {% set query = 'SELECT\n ' ~ column_expressions | join(',\n ') ~ '\nFROM "snowflake"."' ~ schema_name ~ '"."' ~ table_name ~ '"' %}
+        {{ return(query) }}
+    {% endif %}
+{% endmacro %}
+
+
